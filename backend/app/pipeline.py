@@ -17,6 +17,7 @@ from .models import embed_texts, image_features
 from .schemas import AnalysisResult, Claim, Evidence
 from .evidence import retrieve
 from .media import capabilities, decode
+from .analysis import analyze_text
 
 
 def now() -> datetime:
@@ -100,8 +101,9 @@ def extract_claims(text: str, modality: str) -> list[Claim]:
     return [Claim(text=part, modality=modality, extraction_method="sentence_heuristic") for part in parts[:5]]
 
 
-def base_result(analysis_id: str, modality: str, claims: list[Claim], observations: list[str], methods: list[str], records: list[dict]) -> AnalysisResult:
+def base_result(analysis_id: str, modality: str, claims: list[Claim], observations: list[str], methods: list[str], records: list[dict], source_text: str = '') -> AnalysisResult:
     verdict, support, contradict, context, assessments, gaps, retrieval_methods = retrieve(claims, records)
+    analysis = analyze_text(source_text or ' '.join(c.text for c in claims))
     return AnalysisResult(
         analysis_id=analysis_id, modality=modality, verdict=verdict,
         explanation=("Available passages do not resolve every extracted claim." if verdict == 'INSUFFICIENT_EVIDENCE' else
@@ -111,11 +113,13 @@ def base_result(analysis_id: str, modality: str, claims: list[Claim], observatio
         stages={'claim_extraction': 'complete' if claims else 'no_claims', 'evidence_retrieval': 'complete', 'comparison': 'reviewer_scoped'},
         limitations=["Confidence not calibrated.", "Similarity, transcription, and visual observations do not establish truth, location, time, or provenance."],
         methods=methods + retrieval_methods, created_at=now(),
+        crisis_analysis=analysis,
+        currentness={'status': analysis['currentness'], 'temporal_clues': analysis['temporal_clues'], 'basis': 'text/OCR/transcript clues only; source dates require verified evidence.'},
     )
 
 
 def process_text(analysis_id: str, text: str, records: list[dict]) -> AnalysisResult:
-    return base_result(analysis_id, "text", extract_claims(text, "text"), [], ["sentence_heuristic", "local_evidence_keyword_match"], records)
+    return base_result(analysis_id, "text", extract_claims(text, "text"), [], ["sentence_heuristic", "rule_based_crisis_analysis"], records, text)
 
 
 def process_image(analysis_id: str, data: bytes, records: list[dict], accompanying_text: str = "") -> AnalysisResult:
@@ -159,7 +163,8 @@ def process_image(analysis_id: str, data: bytes, records: list[dict], accompanyi
         except (subprocess.TimeoutExpired, OSError):
             ocr_status = 'failed'
             observations.append("OCR was unavailable or timed out.")
-    result = base_result(analysis_id, "image", claims[:5], observations, methods, records)
+    ocr_text = ' '.join(c.text for c in claims if c.modality == 'image')
+    result = base_result(analysis_id, "image", claims[:5], observations, methods, records, accompanying_text + ' ' + ocr_text)
     result.stages.update(image_decode='complete', visual_features=feature_status, ocr=ocr_status)
     result.processing_status = 'partial' if feature_status != 'complete' or ocr_status in {'unavailable','failed'} else 'complete'
     return result
@@ -250,7 +255,7 @@ def process_decoded(analysis_id: str, data: bytes, modality: str, records: list[
             claims.append(claim)
     if modality == 'video':
         observations.append(f'Extracted {len(frames)} timestamped frames; derived frames and speech are observations, not independent corroboration.')
-    result = base_result(analysis_id, modality, claims[:10], observations, methods, records)
+    result = base_result(analysis_id, modality, claims[:10], observations, methods, records, transcript or ' '.join(c.text for c in claims))
     result.processing_status = 'partial' if partial else 'complete'
     result.stages.update(decoding=decoded['status'], transcription=decoded['audio_status'])
     if modality == 'video':

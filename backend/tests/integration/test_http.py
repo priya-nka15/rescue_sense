@@ -62,7 +62,8 @@ def test_evidence_to_verdict_history_and_delete(client):
     claim = 'The controlled test bridge is closed'
     ids = []
     for relation, expected in [('supports','SUPPORTED'), ('contradicts','MIXED_EVIDENCE')]:
-        response = client.post('/api/evidence', json={'title':'Controlled test evidence', 'body':'Fixture passage only.', 'source_note':'Synthetic integration fixture', 'reviewed_claim':claim, 'relation':relation, 'reviewer':'Test', 'passage':'Fixture passage only.'})
+        passage = 'The controlled test bridge is closed.' if relation == 'supports' else 'The controlled test bridge is open, not closed.'
+        response = client.post('/api/evidence', json={'title':'Controlled test evidence', 'body':passage, 'source_note':'Synthetic integration fixture; not a real event', 'reviewed_claim':claim, 'relation':relation, 'reviewer':'Test', 'passage':passage})
         assert response.status_code == 201, response.text
         ids.append(response.json()['id'])
         result = await_job(client, client.post('/api/verify/text', json={'text':claim}))

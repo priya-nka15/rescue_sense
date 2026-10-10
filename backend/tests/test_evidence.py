@@ -53,6 +53,16 @@ def test_unsafe_source_urls_rejected(url):
         validate_source_url(url)
 
 
+def test_redirect_destination_is_dns_checked(monkeypatch):
+    import backend.app.evidence as evidence
+    from urllib.request import Request
+    checked = []
+    monkeypatch.setattr(evidence, '_public_dns', lambda url: checked.append(url))
+    evidence._SafeRedirects().redirect_request(
+        Request('https://example.com/start'), object(), 302, 'redirect', {}, 'https://example.com/next')
+    assert checked == ['https://example.com/next']
+
+
 def test_review_requires_verbatim_passage():
     value = EvidenceInput(title='Test', body='A valid document', source_note='Test', reviewed_claim='A claim', relation='supports', reviewer='Test', passage='Invented quotation')
     with pytest.raises(ValueError, match='verbatim'):
@@ -108,3 +118,38 @@ def test_inaccessible_source_is_reported_without_fabrication(monkeypatch):
     assert result.verdict == 'INSUFFICIENT_EVIDENCE'
     assert any('Source unavailable' in gap for gap in result.evidence_gaps)
     assert not result.supporting_evidence and not result.contradicting_evidence
+
+
+def test_conflicting_review_survives_display_limit():
+    records = [document('supports', identifier=str(i)) for i in range(12)]
+    records.append(document('contradicts', identifier='opposing'))
+    result = process_text('test', 'The bridge is closed.', records)
+    assert result.verdict == 'MIXED_EVIDENCE'
+    assert result.contradicting_evidence[0].evidence_id == 'opposing'
+
+
+def test_fetched_provenance_and_late_passage(monkeypatch):
+    import hashlib
+    body = ('Navigation menu ' * 400) + ' The bridge is closed.'
+    monkeypatch.setattr('backend.app.evidence.fetch_source', lambda url: dict(
+        url='https://example.com/final', title='Final report', publisher=None,
+        body=body, published_at=None, retrieved_at='2026-01-03T00:00:00+00:00'))
+    record = prepare_document(EvidenceInput(title='Source', url='https://example.com/start',
+                                           source_note='Test fixture'), 'source')
+    result = process_text('test', 'The bridge is closed.', [record])
+    assert result.verdict == 'INSUFFICIENT_EVIDENCE'
+    item = result.context_evidence[0]
+    assert 'The bridge is closed' in item.excerpt
+    assert item.url == 'https://example.com/final'
+    assert item.content_sha256 == hashlib.sha256(body.encode()).hexdigest()
+
+
+def test_unknown_source_encoding_is_recoverable(monkeypatch):
+    import backend.app.evidence as evidence
+    response = FakeResponse(b'<p>Public source passage for review.</p>')
+    response.headers.replace_header('Content-Type', 'text/html; charset=unknown-encoding')
+    monkeypatch.setattr(evidence, '_public_dns', lambda url: None)
+    monkeypatch.setattr(evidence, 'build_opener', lambda *args: type('Opener', (), {
+        'open': lambda self, request, timeout: response})())
+    with pytest.raises(ValueError, match='parsed as text'):
+        evidence.fetch_source('https://example.com/report')

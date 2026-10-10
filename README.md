@@ -1,5 +1,61 @@
 # CrisisSense
 
+## Reliability verification
+
+Current results (superseding the historical counts below): backend/research and
+real HTTP integration together: **54 passed, 5 warnings**; frontend: **4 passed**;
+production build: **passed**; `pip check`: **no broken requirements found**.
+Warnings concern Python's deprecated `audioop` and SciPy optimizer options.
+Use the tested Python 3.11 environment; the audio adapter is not Python 3.13 ready.
+
+The latest reliability pass exercised isolated backend and Vite servers through
+the frontend API proxy. Public HTML retrieval returned actual contextual passages
+and retrieval timestamps. A generated notice image passed OCR and local visual
+feature extraction; local speech with three seconds of leading silence produced
+`the bridges closed`; a local MP4 produced a frame at 0 ms. Malformed image, audio,
+and video uploads failed cleanly, the server remained healthy, and four successful
+results persisted in an isolated database. These fixtures do not measure accuracy.
+
+Retrieved passages now retain the final source URL and the hash of the fetched
+text. Retrieval searches the bounded 20,000-character body. All matching reviewer
+annotations participate in decisions even when there are more than ten; only
+contextual display results are capped at ten per claim. The frontend identifies
+the claim associated with each evidence item. Unknown page encodings are reported
+as retrieval failures. Speech following an initially silent segment is processed.
+
+Fresh terminal startup, using the existing installed environment:
+
+```bash
+cd /home/ubuntupj/Projects/CrisisSense
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export CRISISSENSE_ASR_PATH="$PWD/data/models/vosk-model-small-en-us-0.15"
+.venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+In a second terminal:
+
+```bash
+cd /home/ubuntupj/Projects/CrisisSense/frontend
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
+
+Open the frontend URL. If its port is occupied, use 5174 instead; the API proxy
+still targets port 8000. Do not start a second backend on an occupied port.
+Offline model settings do not disable user-supplied source URL retrieval, which
+requires connectivity. No web-search provider is configured. Verdicts remain
+conditional on explicit reviewer annotations; page retrieval does not independently
+determine support or contradiction. Browser visual interaction was not tested
+in this pass; frontend rendering assertions used JSDOM with mocked API responses.
+
+Results also include `crisis_analysis` (heuristic crisis-language flag, incident
+type, location clue, severity clue, needs, supporting text, and limitations) and
+`currentness` (date or temporal expressions found in text, OCR, or transcripts).
+These are extraction clues, not calibrated probabilities or proof of an event's
+time, place, or authenticity.
+Hypothetical and uncertain wording is labelled as such; multiple locations and
+multiple date clues are retained. A relative date is reported separately from a
+calendar date, and conflicting or multiple clues are marked for review.
+
 Local, evidence-aware review software for crisis-related text, images, audio, and video. It is decision support: it never treats a classifier, OCR result, transcript, or missing search result as proof of truth.
 
 ## Current capability

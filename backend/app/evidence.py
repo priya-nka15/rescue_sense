@@ -59,6 +59,7 @@ class _PageParser(HTMLParser):
 class _SafeRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         validate_source_url(newurl)
+        _public_dns(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -128,7 +129,7 @@ def fetch_source(url: str) -> dict:
     parser = _PageParser()
     try:
         parser.feed(payload.decode(charset, 'replace'))
-    except (UnicodeError, ValueError) as error:
+    except (UnicodeError, ValueError, LookupError) as error:
         raise ValueError('Source page could not be parsed as text.') from error
     body = ' '.join(parser.parts)
     if len(body) < 20:
@@ -169,13 +170,15 @@ def retrieve(claims, records: list[dict]):
                 fetched = fetch_source(url)
                 methods.append('bounded_source_url_fetch')
                 if record.get('relation') == 'context':
-                    record.update({key: fetched[key] for key in ('title', 'publisher', 'body', 'published_at', 'retrieved_at')})
+                    record.update({key: fetched[key] for key in ('url', 'title', 'publisher', 'body', 'published_at', 'retrieved_at')})
+                    record['content_sha256'] = hashlib.sha256(fetched['body'].encode()).hexdigest()
                     record['category'] = 'unverified'
                     record['source_note'] = 'Fetched public HTML source; not independently verified.'
                 else:
                     # Keep the reviewer assertion intact and add fetched text as context.
                     hydrated.append({**record, 'id': f"{record['id']}:fetched", 'title': fetched['title'],
                                      'publisher': fetched['publisher'] or record.get('publisher'), 'body': fetched['body'],
+                                     'url': fetched['url'], 'content_sha256': hashlib.sha256(fetched['body'].encode()).hexdigest(),
                                      'relation': 'context', 'reviewed_claim': None, 'reviewer': None, 'passage': None,
                                      'category': 'unverified', 'source_note': 'Fetched public HTML source; reviewer assertion remains separate.',
                                      'retrieved_at': fetched['retrieved_at'], 'published_at': fetched['published_at']})
@@ -185,9 +188,9 @@ def retrieve(claims, records: list[dict]):
     records = hydrated
     # Cap both collection and passages; reviewers can manage the local collection.
     candidates = []
-    for record in records[:200]:
+    for record in records:
         passages = [record.get('passage')] if record.get('passage') else []
-        passages += [record['body'][start:start + 800] for start in range(0, min(len(record['body']), 4000), 800)]
+        passages += [record['body'][start:start + 800] for start in range(0, min(len(record['body']), 20000), 800)]
         candidates.extend((record, passage) for passage in dict.fromkeys(passages) if passage)
     vectors = None
     if claims and candidates:
@@ -209,6 +212,7 @@ def retrieve(claims, records: list[dict]):
                 ranked.append((exact, score, record, passage))
         ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
         seen, related = set(), []
+        context_count = 0
         for exact, score, record, passage in ranked:
             if record['id'] in seen:
                 continue
@@ -217,6 +221,10 @@ def retrieve(claims, records: list[dict]):
             reviewed_passage = record.get('passage')
             if exact and record.get('reviewer') and reviewed_passage and reviewed_passage in record['body']:
                 relation = record.get('relation') if record.get('relation') in {'supports', 'contradicts'} else 'context'
+            if relation == 'context':
+                if context_count >= 10:
+                    continue
+                context_count += 1
             retrieved_at = record.get('retrieved_at')
             item = Evidence(evidence_id=record['id'], claim_text=claim.text, title=record['title'],
                 publisher=record.get('publisher'), url=record.get('url'), excerpt=reviewed_passage if relation != 'context' else passage,
@@ -225,8 +233,6 @@ def retrieve(claims, records: list[dict]):
                 retrieval_score=round(score, 5), status='reviewer_assertion' if relation != 'context' else ('retrieved_context' if retrieved_at else 'local_passage_match'))
             {'supports': support, 'contradicts': contradict, 'context': context}[relation].append(item)
             related.append(relation)
-            if len(seen) == 10:
-                break
         verdict = decide('supports' in related, 'contradicts' in related)
         assessments.append({'claim': claim.text, 'verdict': verdict, 'basis': 'Exact-claim reviewer annotations; source reliability is not independently established.'})
         if verdict == 'INSUFFICIENT_EVIDENCE':

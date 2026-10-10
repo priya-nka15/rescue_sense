@@ -64,7 +64,7 @@ describe('CrisisSense frontend', () => {
       verdict: 'SUPPORTED',
       processing_status: 'complete',
       stages: { evidence_retrieval: 'complete', comparison: 'reviewer_scoped' },
-      supporting_evidence: [{ title: 'Controlled source', category: 'user_provided', excerpt: 'The bridge is closed.', relation: 'supports', reviewer: 'Test reviewer', source_note: 'Synthetic fixture' }],
+      supporting_evidence: [{ title: 'Controlled source', claim_text: 'Bridge collapsed', url: 'https://example.com/report', category: 'user_provided', excerpt: 'The bridge is closed.', relation: 'supports', reviewer: 'Test reviewer', source_note: 'Synthetic fixture' }],
       claim_assessments: [{ claim: 'Bridge collapsed', verdict: 'SUPPORTED' }],
       evidence_gaps: [],
     }
@@ -83,5 +83,7 @@ describe('CrisisSense frontend', () => {
     expect(screen.getByText('Controlled source')).toBeTruthy()
     expect(screen.getByText(/Reviewed by Test reviewer/)).toBeTruthy()
     expect(screen.getByText('comparison: reviewer_scoped')).toBeTruthy()
+    expect(screen.getByText('Controlled source: evidence for "Bridge collapsed" (supports)')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open source' }).getAttribute('href')).toBe('https://example.com/report')
   })
 })

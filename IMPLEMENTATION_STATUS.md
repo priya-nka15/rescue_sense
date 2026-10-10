@@ -1,5 +1,20 @@
 # Implementation Status
 
+## Member 1 and Member 2 integration
+
+- Added `backend/app/analysis.py`, a transparent CPU-only heuristic extractor for crisis language, seven incident classes, location phrases, severity clues, response needs, and temporal expressions. It returns structured `crisis_analysis` and `currentness` fields without changing reviewer-scoped verdict logic.
+- Text, OCR, and Vosk transcript text feed the same analysis object. Video keeps timestamped frame observations separate. Cached MiniLM, MobileNetV3-Small, Tesseract, FFmpeg, and Vosk behavior is preserved.
+- The frontend displays incident, location, severity, needs, and currentness clues with explicit uncertainty. No calibrated confidence or authenticity decision is added.
+- Acceptance examples covered fire, flood, accident, earthquake, medical emergency, infrastructure failure, non-crisis text, hypothetical wording, missing and multiple locations, severity extremes, multiple needs, old/relative/multiple date clues, OCR, speech, and video observations. Multiple location/date clues remain structured and qualified for review.
+
+## Latest reliability pass
+
+- Full backend/research suite, including five real HTTP integration tests: 54 passed, 5 deprecation warnings. Frontend: 4 passed; production build passed; pip check found no broken requirements.
+- Fixed fetched-text hashes/final URLs, retrieval beyond 4,000 characters, truncation of conflicting reviewer annotations, unsupported page charset handling, and ASR dropping speech after a silent opening.
+- Regression tests cover each backend fix. Frontend tests verify evidence-to-claim attribution and source link rendering using mocked responses.
+- Started isolated backend and frontend servers and verified the actual Vite API proxy. Live example.com retrieval returned contextual evidence with provenance and abstained. Generated notice OCR extracted its claim; visual features ran; Vosk transcribed speech after a three-second silent intro as `the bridges closed`; local video extraction returned a frame at 0 ms. All four results persisted. Malformed image/audio/video uploads failed and service health recovered.
+- Validation servers were stopped. No model/dataset downloads or installations were performed. Browser visual interaction and independent research accuracy remain untested. Audio uses Python 3.11's deprecated audioop; do not assume Python 3.13 compatibility.
+
 ## Verified locally
 
 - Python 3.11 virtual environment with the pinned backend dependencies.

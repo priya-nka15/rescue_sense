@@ -1,5 +1,9 @@
 # Progress / Handoff Log
 
+## Latest reliability verification
+
+54 backend/research/HTTP tests and 4 frontend tests passed; production build and dependency consistency check passed. Fixed fetched provenance, later-passage retrieval, conflicting-review truncation, malformed charset handling, and speech after initial silence. Isolated backend/Vite servers verified public URL retrieval, OCR/visual features, Vosk speech, video frames, persistence, and malformed-input recovery. README records startup commands and limits. No browser visual check or independent benchmark accuracy result is claimed.
+
 ## Current state
 **Project status: local CPU implementation and verification completed; independent research evaluation is blocked on benchmark access and label fit.**
 

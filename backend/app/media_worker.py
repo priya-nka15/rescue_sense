@@ -19,8 +19,16 @@ def recognize_wav(path: Path, model_path: str) -> dict:
     import vosk
     vosk.SetLogLevel(-1)
     with wave.open(str(path), 'rb') as audio:
-        frames = audio.readframes(min(audio.getnframes(), audio.getframerate() * 2))
-        if not frames or audioop.rms(frames, audio.getsampwidth()) == 0:
+        if audio.getnchannels() != 1 or audio.getsampwidth() != 2 or audio.getframerate() != 16000:
+            raise ValueError('Transcription requires 16 kHz mono 16-bit PCM audio.')
+        if audio.getnframes() > settings.max_audio_seconds * 16000:
+            raise ValueError('Audio duration exceeds the local processing limit.')
+        has_signal = False
+        while frames := audio.readframes(16000):
+            if audioop.rms(frames, 2) > 0:
+                has_signal = True
+                break
+        if not has_signal:
             return {'audio_status':'complete', 'transcript':'', 'words':[], 'reason':'no_speech'}
     recognizer = vosk.KaldiRecognizer(vosk.Model(model_path),16000)
     recognizer.SetWords(True)

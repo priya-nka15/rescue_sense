@@ -85,6 +85,8 @@ class AnalysisResult(BaseModel):
     transcript_words: list[dict] = []
     frames: list[dict] = []
     uncertainty: str = 'Uncalibrated; review source reliability and claim scope.'
+    crisis_analysis: dict = {}
+    currentness: dict = {}
     created_at: datetime
 
 

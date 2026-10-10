@@ -80,3 +80,24 @@ def test_local_network_origins_are_allowed_but_public_origins_are_rejected():
     assert RequestLimits._allowed_origin('http://127.0.0.1:8000')
     assert not RequestLimits._allowed_origin('https://example.com:5173')
     assert RequestLimits._allowed_origin('http://192.168.1.25:9000')
+
+
+def test_transcription_does_not_drop_speech_after_silent_intro(tmp_path, monkeypatch):
+    import sys
+    import wave
+    from backend.app.media_worker import recognize_wav
+    model = tmp_path / 'am'
+    model.mkdir()
+    (model / 'final.mdl').touch()
+    audio = tmp_path / 'intro.wav'
+    with wave.open(str(audio), 'wb') as stream:
+        stream.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+        stream.writeframes(bytes(96000) + b'\x01\x01' * 16000)
+    recognizer = Mock()
+    recognizer.AcceptWaveform.return_value = False
+    recognizer.FinalResult.return_value = '{"text":"controlled mock speech"}'
+    monkeypatch.setattr('importlib.util.find_spec', lambda name: True)
+    monkeypatch.setitem(sys.modules, 'vosk', Mock(KaldiRecognizer=Mock(return_value=recognizer)))
+    result = recognize_wav(audio, str(tmp_path))
+    assert result['transcript'] == 'controlled mock speech'
+    assert recognizer.AcceptWaveform.call_count > 0
