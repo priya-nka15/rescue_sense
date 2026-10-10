@@ -1,0 +1,3 @@
+# English ASR. A system or project-local FFmpeg/FFprobe is also required.
+# PyAV 16.0.1 is an alternative adapter, but installation was not verified.
+vosk==0.3.45

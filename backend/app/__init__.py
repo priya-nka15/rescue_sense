@@ -1,0 +1,2 @@
+"""CrisisSense local verification service."""
+

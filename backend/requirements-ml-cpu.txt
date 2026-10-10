@@ -1,0 +1,6 @@
+# Optional local inference runtime. Install only after the base backend works.
+# The official CPU index prevents CUDA packages from being selected.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+sentence-transformers==3.4.1

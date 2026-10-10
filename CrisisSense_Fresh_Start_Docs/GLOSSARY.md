@@ -1,0 +1,21 @@
+# Glossary / Domain Notes
+
+- **Crisis report:** Text or media claim about an emergency, disaster, or related event.
+- **Modality:** A form of input such as text, image, audio, or video.
+- **Multimodal:** A method that uses two or more modalities; this term alone does not imply useful fusion.
+- **Event context:** Information about the particular incident a report claims to describe, including event identity, location, and time where known.
+- **Event-context consistency:** Whether available evidence is compatible with a claim about a specific event under a defined protocol.
+- **Out-of-context media:** Media presented as relating to an event or time that differs from its actual or documented context.
+- **Recycled media:** Previously published or reused media; reuse alone does not prove deception.
+- **Evidence:** A sourced observation or record relevant to a claim, with provenance and limitations.
+- **Contradictory evidence:** Evidence that conflicts with a defined claim; must be distinguished from missing evidence.
+- **Insufficient evidence:** Available evidence does not justify a reliable match or contradiction decision.
+- **Currentness:** Whether evidence supports that information/media is current for the claimed time; not established by content category alone.
+- **Pretrained model:** A model whose parameters were trained previously, reused for inference or adapted to a task.
+- **Frozen features:** Representations extracted from a pretrained model without updating its parameters.
+- **Baseline:** A simpler, reproducible method used as a comparison point.
+- **Data leakage:** Information from validation/test data improperly influencing training or model selection.
+- **Event-disjoint split:** A split where event identities do not overlap between designated partitions.
+- **Calibration:** Agreement between stated probabilities/confidence and observed correctness, measured using suitable methods.
+- **Abstention:** A system declines to make a strong determination when evidence is inadequate.
+- **Ground truth:** Labels established through a documented, defensible process; not simply a model's output.
