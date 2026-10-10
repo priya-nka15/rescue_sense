@@ -86,4 +86,35 @@ describe('CrisisSense frontend', () => {
     expect(screen.getByText('Controlled source: evidence for "Bridge collapsed" (supports)')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open source' }).getAttribute('href')).toBe('https://example.com/report')
   })
+
+  it('renders crisis situation summary and collapsible diagnostics', async () => {
+    const crisisResult = {
+      ...result,
+      crisis_analysis: {
+        incident_type: 'flood',
+        location: 'Riverdale Bridge',
+        locations: ['Riverdale Bridge'],
+        severity: 'high',
+        is_crisis_language: true,
+        needs: ['rescue', 'shelter'],
+        situation_summary: 'Flood incident in/near Riverdale Bridge assessed as high severity.',
+      },
+      currentness: { status: 'relative_date_clue', temporal_clues: ['today'] },
+    }
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/status') return response({ tools: { tesseract: false, ffmpeg: false }, resources: { disk_free_bytes: 10_000_000_000 } })
+      if (url === '/api/history' || url === '/api/evidence') return response([])
+      if (url === '/api/verify/text') return response({ job_id: 'job-1', status: 'queued' }, 202)
+      if (url === '/api/jobs/job-1') return response({ job_id: 'job-1', status: 'completed', stage: 'completed', result: crisisResult })
+      return response({})
+    }))
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('Claim or report'), 'Flood at Riverdale Bridge')
+    await userEvent.click(screen.getByRole('button', { name: 'Assess text' }))
+    await waitFor(() => expect(screen.getByText('Crisis Situation Summary')).toBeTruthy())
+    expect(screen.getAllByText(/Riverdale Bridge/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/rescue/)).toBeTruthy()
+    expect(screen.getByText(/Technical Diagnostics/)).toBeTruthy()
+  })
 })

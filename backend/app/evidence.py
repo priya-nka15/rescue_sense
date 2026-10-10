@@ -1,16 +1,24 @@
 """Bounded local/web retrieval and explicitly reviewer-scoped decisions."""
+from __future__ import annotations
+
 import hashlib
 import ipaddress
+import logging
+import os
 import re
 import socket
+import sys
 from html.parser import HTMLParser
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .models import embed_texts
 from .schemas import Evidence, EvidenceInput
+from .search import get_search_provider
+
+logger = logging.getLogger("crisissense.evidence")
 
 MAX_SOURCE_BYTES = 1_000_000
 FETCH_TIMEOUT_SECONDS = 8
@@ -157,15 +165,62 @@ def prepare_document(value: EvidenceInput, identifier: str) -> dict:
                 content_sha256=hashlib.sha256(value.body.encode()).hexdigest())
 
 
-def retrieve(claims, records: list[dict]):
+def retrieve(claims, records: list[dict], search_enabled: bool = True):
+    """Retrieve supporting, contradicting, and context evidence for claims.
+
+    Evaluates every claim separately against local collection and real configured
+    search providers. Preserves explicit human-reviewer annotations with highest precedence.
+    """
     support, contradict, context, assessments = [], [], [], []
     methods = ['lexical_passage_retrieval', 'exact_claim_reviewer_relationship']
-    gaps = []
-    hydrated = []
+    gaps: list[str] = []
+    hydrated: list[dict] = []
+
+    # 1. Automatic web search retrieval (if provider active and not in isolated test mode)
+    provider = None
+    # Disable automated external network calls during pytest unless explicitly configured
+    is_pytest = 'pytest' in sys.modules and not os.getenv("CRISISSENSE_SEARCH_PROVIDER")
+    if search_enabled and not is_pytest:
+        provider, info = get_search_provider()
+        if provider and claims:
+            methods.append(f"{provider.name}_web_search")
+            existing_urls = {r.get('url') for r in records if r.get('url')}
+            for claim in claims[:3]:
+                try:
+                    search_results = provider.search(claim.text, max_results=3)
+                    for item in search_results:
+                        if item.url in existing_urls:
+                            continue
+                        existing_urls.add(item.url)
+                        try:
+                            fetched = fetch_source(item.url)
+                            records.append({
+                                'id': f"search:{hashlib.sha256(item.url.encode()).hexdigest()[:12]}",
+                                'title': fetched['title'] or item.title,
+                                'publisher': fetched['publisher'] or item.publisher,
+                                'body': fetched['body'],
+                                'url': fetched['url'],
+                                'content_sha256': hashlib.sha256(fetched['body'].encode()).hexdigest(),
+                                'relation': 'context',
+                                'reviewed_claim': None,
+                                'reviewer': None,
+                                'passage': None,
+                                'category': 'news',
+                                'source_note': f"Retrieved via {provider.name} search; public web source.",
+                                'retrieved_at': fetched['retrieved_at'],
+                                'published_at': fetched['published_at'] or item.published_at,
+                                'ingested_at': datetime.now(timezone.utc).isoformat(),
+                            })
+                        except ValueError as fetch_err:
+                            gaps.append(f"Web source fetch failed for {item.url}: {fetch_err}")
+                except Exception as search_err:
+                    gaps.append(f"Search provider ({provider.name}) error for query '{claim.text}': {search_err}")
+
+    # 2. Hydrate local user-supplied URLs
     for original in records[:200]:
         record = dict(original)
         url = record.get('url')
-        if url:
+        if url and not record.get('retrieved_at'):
             try:
                 fetched = fetch_source(url)
                 methods.append('bounded_source_url_fetch')
@@ -175,7 +230,7 @@ def retrieve(claims, records: list[dict]):
                     record['category'] = 'unverified'
                     record['source_note'] = 'Fetched public HTML source; not independently verified.'
                 else:
-                    # Keep the reviewer assertion intact and add fetched text as context.
+                    # Keep reviewer assertion intact and add fetched text as context
                     hydrated.append({**record, 'id': f"{record['id']}:fetched", 'title': fetched['title'],
                                      'publisher': fetched['publisher'] or record.get('publisher'), 'body': fetched['body'],
                                      'url': fetched['url'], 'content_sha256': hashlib.sha256(fetched['body'].encode()).hexdigest(),
@@ -186,12 +241,15 @@ def retrieve(claims, records: list[dict]):
                 gaps.append(f"Source unavailable for {url}: {error}")
         hydrated.append(record)
     records = hydrated
-    # Cap both collection and passages; reviewers can manage the local collection.
+
+    # 3. Candidate passages extraction
     candidates = []
     for record in records:
         passages = [record.get('passage')] if record.get('passage') else []
         passages += [record['body'][start:start + 800] for start in range(0, min(len(record['body']), 20000), 800)]
         candidates.extend((record, passage) for passage in dict.fromkeys(passages) if passage)
+
+    # 4. Dense semantic embeddings (if available)
     vectors = None
     if claims and candidates:
         try:
@@ -199,46 +257,88 @@ def retrieve(claims, records: list[dict]):
             methods.append('MiniLM_cosine_passage_ranking')
         except (RuntimeError, OSError, ValueError):
             gaps.append('Semantic retrieval unavailable; lexical retrieval was used.')
+
+    # 5. Evaluate each claim separately
     for ci, claim in enumerate(claims):
         words = set(re.findall(r'\w+', claim.text.casefold()))
         ranked = []
         for index, (record, passage) in enumerate(candidates):
             tokens = set(re.findall(r'\w+', passage.casefold()))
             lexical = len(words & tokens) / max(1, len(words | tokens))
-            semantic = sum(a*b for a, b in zip(vectors[ci], vectors[len(claims)+index])) if vectors else 0.0
+            semantic = sum(a * b for a, b in zip(vectors[ci], vectors[len(claims) + index])) if vectors else 0.0
             exact = normalize(record.get('reviewed_claim') or '') == normalize(claim.text)
             score = max(lexical, semantic)
             if exact or lexical >= .1 or semantic >= .45:
                 ranked.append((exact, score, record, passage))
+
         ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        seen, related = set(), []
-        context_count = 0
+        seen: set[str] = set()
+        claim_support = 0
+        claim_contradict = 0
+        claim_context = 0
+
         for exact, score, record, passage in ranked:
             if record['id'] in seen:
                 continue
             seen.add(record['id'])
+
             relation = 'context'
             reviewed_passage = record.get('passage')
+            # Exact match with a human reviewer annotation takes absolute precedence
             if exact and record.get('reviewer') and reviewed_passage and reviewed_passage in record['body']:
                 relation = record.get('relation') if record.get('relation') in {'supports', 'contradicts'} else 'context'
+
             if relation == 'context':
-                if context_count >= 10:
+                if claim_context >= 10:
                     continue
-                context_count += 1
+                claim_context += 1
+            elif relation == 'supports':
+                claim_support += 1
+            elif relation == 'contradicts':
+                claim_contradict += 1
+
             retrieved_at = record.get('retrieved_at')
-            item = Evidence(evidence_id=record['id'], claim_text=claim.text, title=record['title'],
-                publisher=record.get('publisher'), url=record.get('url'), excerpt=reviewed_passage if relation != 'context' else passage,
-                category=record['category'], relation=relation, retrieved_at=retrieved_at, published_at=record.get('published_at'), ingested_at=record.get('ingested_at'),
-                source_note=record.get('source_note'), reviewer=record.get('reviewer'), content_sha256=record.get('content_sha256'),
-                retrieval_score=round(score, 5), status='reviewer_assertion' if relation != 'context' else ('retrieved_context' if retrieved_at else 'local_passage_match'))
+            item = Evidence(
+                evidence_id=record['id'],
+                claim_text=claim.text,
+                title=record['title'],
+                publisher=record.get('publisher'),
+                url=record.get('url'),
+                excerpt=reviewed_passage if relation != 'context' else passage,
+                category=record['category'],
+                relation=relation,
+                retrieved_at=retrieved_at,
+                published_at=record.get('published_at'),
+                ingested_at=record.get('ingested_at'),
+                source_note=record.get('source_note'),
+                reviewer=record.get('reviewer'),
+                content_sha256=record.get('content_sha256'),
+                retrieval_score=round(score, 5),
+                status='reviewer_assertion' if relation != 'context' else ('retrieved_context' if retrieved_at else 'local_passage_match'),
+            )
             {'supports': support, 'contradicts': contradict, 'context': context}[relation].append(item)
-            related.append(relation)
-        verdict = decide('supports' in related, 'contradicts' in related)
-        assessments.append({'claim': claim.text, 'verdict': verdict, 'basis': 'Exact-claim reviewer annotations; source reliability is not independently established.'})
-        if verdict == 'INSUFFICIENT_EVIDENCE':
-            gaps.append(f'No reviewed supporting or contradicting passage for: {claim.text}')
+
+        claim_verdict = decide(claim_support > 0, claim_contradict > 0)
+        basis = (
+            f"Reviewer annotation ({'supports' if claim_support else 'contradicts'})"
+            if (claim_support or claim_contradict)
+            else "Available passages do not establish confirmation or contradiction."
+        )
+        assessments.append({
+            'claim': claim.text,
+            'verdict': claim_verdict,
+            'basis': basis,
+            'supporting_count': claim_support,
+            'contradicting_count': claim_contradict,
+            'context_count': claim_context,
+        })
+
+        if claim_verdict == 'INSUFFICIENT_EVIDENCE':
+            gaps.append(f"No reviewed supporting or contradicting passage for: {claim.text}")
+
     if not claims:
         gaps.append('No checkable claim was extracted.')
+
     verdicts = [a['verdict'] for a in assessments]
     if 'MIXED_EVIDENCE' in verdicts or ('SUPPORTED' in verdicts and 'CONTRADICTED' in verdicts):
         verdict = 'MIXED_EVIDENCE'
@@ -246,8 +346,15 @@ def retrieve(claims, records: list[dict]):
         verdict = 'INSUFFICIENT_EVIDENCE'
     else:
         verdict = verdicts[0]
+
     return verdict, support, contradict, context, assessments, gaps, methods
 
 
 def decide(support: bool, contradict: bool) -> str:
-    return 'MIXED_EVIDENCE' if support and contradict else 'SUPPORTED' if support else 'CONTRADICTED' if contradict else 'INSUFFICIENT_EVIDENCE'
+    """Determine verdict based on presence of supporting and contradicting evidence."""
+    return (
+        'MIXED_EVIDENCE' if support and contradict
+        else 'SUPPORTED' if support
+        else 'CONTRADICTED' if contradict
+        else 'INSUFFICIENT_EVIDENCE'
+    )

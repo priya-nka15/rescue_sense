@@ -13,6 +13,7 @@ from .models import availability
 from .schemas import AnalysisResult, HistoryItem, JobDetail, JobResponse, TextRequest, EvidenceInput
 from .evidence import prepare_document
 from .media import capabilities
+from .search import get_search_provider
 from .security import RequestLimits
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -83,7 +84,29 @@ def status() -> dict:
     disk = shutil.disk_usage(settings.root)
     memory = psutil.virtual_memory()
     caps = capabilities()
-    return {"version": settings.version, "capabilities": caps, "models": {"asr": "local_vosk" if caps['asr'] else "unavailable", "visual": "local_cache_adapter"}, "tools": {"tesseract": bool(shutil.which("tesseract")), "ffmpeg": bool(shutil.which("ffmpeg")), 'video_decoder': caps['decoder'], 'source_fetch': 'bounded_public_html'}, "resources": {"disk_free_bytes": disk.free, "memory_available_bytes": memory.available}, "limits": {"image_bytes": settings.max_image_bytes, "audio_bytes": settings.max_audio_bytes, "video_bytes": settings.max_video_bytes, "audio_seconds": settings.max_audio_seconds, "video_seconds": settings.max_video_seconds, "video_frames": settings.max_video_frames}}
+    _, search_info = get_search_provider()
+    return {
+        "version": settings.version,
+        "capabilities": caps,
+        "models": {"asr": "local_vosk" if caps['asr'] else "unavailable", "visual": "local_cache_adapter"},
+        "tools": {
+            "tesseract": bool(shutil.which("tesseract")),
+            "ffmpeg": bool(shutil.which("ffmpeg")),
+            'video_decoder': caps['decoder'],
+            'source_fetch': 'bounded_public_html',
+            'search_provider': search_info['provider'],
+        },
+        "search": search_info,
+        "resources": {"disk_free_bytes": disk.free, "memory_available_bytes": memory.available},
+        "limits": {
+            "image_bytes": settings.max_image_bytes,
+            "audio_bytes": settings.max_audio_bytes,
+            "video_bytes": settings.max_video_bytes,
+            "audio_seconds": settings.max_audio_seconds,
+            "video_seconds": settings.max_video_seconds,
+            "video_frames": settings.max_video_frames,
+        },
+    }
 
 
 @app.get("/api/models")
@@ -91,7 +114,14 @@ def models() -> dict: return {"models": availability() + [{"id": "tesseract", "t
 
 
 @app.get("/api/config")
-def config() -> dict: return {"evidence_retrieval": "local collection plus bounded public HTML URL fetch", "online_retrieval": "no search provider or API key configured; only user-supplied URLs are fetched", "retention": "uploads are processed in memory and not retained"}
+def config() -> dict:
+    _, search_info = get_search_provider()
+    return {
+        "evidence_retrieval": "local collection plus bounded public HTML URL fetch",
+        "search_provider": search_info,
+        "online_retrieval": search_info["description"],
+        "retention": "uploads are processed in memory and not retained",
+    }
 
 
 @app.post("/api/verify/text", response_model=JobResponse, status_code=202)

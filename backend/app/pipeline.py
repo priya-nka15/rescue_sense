@@ -93,12 +93,7 @@ def sample_timestamps(duration_ms: int, max_frames: int) -> list[int]:
     return [round(index * (duration_ms - 1) / (count - 1)) for index in range(count)]
 
 
-def extract_claims(text: str, modality: str) -> list[Claim]:
-    normalized = " ".join(text.split())
-    parts = [part.strip() for part in re.findall(r'[^.!?]+[.!?]?', normalized)
-             if len(part.strip()) >= 3 and not part.endswith('?')]
-    parts = [part.rstrip('.!') for part in parts]
-    return [Claim(text=part, modality=modality, extraction_method="sentence_heuristic") for part in parts[:5]]
+from .claims import extract_claims
 
 
 def base_result(analysis_id: str, modality: str, claims: list[Claim], observations: list[str], methods: list[str], records: list[dict], source_text: str = '') -> AnalysisResult:
